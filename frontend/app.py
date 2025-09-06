@@ -58,6 +58,8 @@ group = st.sidebar.selectbox(
 )
 step = st.sidebar.selectbox("Stufe", options=[1, 2, 3, 4, 5, 6])
 
+# test comment
+
 if st.sidebar.button("Lookup Salary"):
     try:
         resp = requests.get(f"{API_URL}/lookup", params={"group": group, "step": step})
@@ -67,7 +69,7 @@ if st.sidebar.button("Lookup Salary"):
             label=f"{data['Entgeltgruppe']} Stufe {data['Stufe']}",
             value=f"{data['Salary']:.2f} €",
         )
-        #st.sidebar.caption(f"Valid from: {data['valid_from']} ({data['region']})")
+        # st.sidebar.caption(f"Valid from: {data['valid_from']} ({data['region']})")
     except requests.exceptions.HTTPError:
         st.sidebar.error("Salary cell not found!")
 
@@ -83,15 +85,30 @@ try:
 
     # Reorder Entgeltgruppen
     order = [
-    "E 1", "E 2", "E 2Ü", "E 3", "E 4", "E 5", "E 6",
-    "E 7", "E 8", "E 9a", "E 9b", "E 10", "E 11",
-    "E 12", "E 13", "E 13Ü", "E 14", "E 15", "E 15Ü"
+        "E 1",
+        "E 2",
+        "E 2Ü",
+        "E 3",
+        "E 4",
+        "E 5",
+        "E 6",
+        "E 7",
+        "E 8",
+        "E 9a",
+        "E 9b",
+        "E 10",
+        "E 11",
+        "E 12",
+        "E 13",
+        "E 13Ü",
+        "E 14",
+        "E 15",
+        "E 15Ü",
     ]
 
     df_pivot = df.pivot(index="Entgeltgruppe", columns="Stufe", values="Salary")
     df_pivot = df_pivot.reindex(order)  # reindex rows
     df_pivot = df_pivot.sort_index(axis=1)  # sort Stufen columns
-
 
     # -------------------------------
     # KPI Metrics
