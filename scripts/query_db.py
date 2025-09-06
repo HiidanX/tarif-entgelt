@@ -13,7 +13,7 @@ def main():
     # Example 1: lookup E 13, Stufe 3
     query = """
     SELECT Entgeltgruppe, Stufe, Salary, valid_from
-    FROM tvl_salaries
+    FROM salaries
     WHERE Entgeltgruppe = 'E 13' AND Stufe = 3
     """
     df = pd.read_sql(query, con)
@@ -23,7 +23,7 @@ def main():
     # Example 2: show all Stufen for E 13
     query2 = """
     SELECT *
-    FROM tvl_salaries
+    FROM salaries
     WHERE Entgeltgruppe = 'E 13'
     ORDER BY Stufe
     """
