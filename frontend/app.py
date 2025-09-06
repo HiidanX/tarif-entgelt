@@ -57,6 +57,8 @@ group = st.sidebar.selectbox(
 )
 step = st.sidebar.selectbox("Stufe", options=[1, 2, 3, 4, 5, 6])
 
+#test comment
+
 if st.sidebar.button("Lookup Salary"):
     try:
         resp = requests.get(f"{API_URL}/lookup", params={"group": group, "step": step})
