@@ -1,20 +1,42 @@
+# src/api/main.py
+
 import sqlite3
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# -------------------------------
+# Config: database
+# -------------------------------
+BASE_DIR = Path(__file__).resolve().parent.parent.parent  # Project root
 DB_PATH = BASE_DIR / "data" / "salaries.db"
 
-app = FastAPI(title="TV-L Salary API", version="1.0")
+# Ensure data folder exists
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# -------------------------------
+# FastAPI app
+# -------------------------------
+app = FastAPI(title="Tarif Salary API", version="1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-# -----------------------------
-# Pydantic models
-# -----------------------------
-class PayCell(BaseModel):
+# -------------------------------
+# Models
+# -------------------------------
+class SalaryCell(BaseModel):
+    table_name: str
     Entgeltgruppe: str
     Stufe: int
     Salary: float
@@ -22,63 +44,94 @@ class PayCell(BaseModel):
     region: str
 
 
-# -----------------------------
-# Helper to query DB
-# -----------------------------
-def get_db_connection():
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
-    return con
+# -------------------------------
+# Helper functions
+# -------------------------------
+def check_salaries_table():
+    """Raise HTTPException if the salaries table is missing"""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='salaries';"
+    )
+    if cur.fetchone() is None:
+        conn.close()
+        raise HTTPException(
+            status_code=500, detail="Database table 'salaries' not found"
+        )
+    conn.close()
 
 
-# -----------------------------
+def query_salaries(table_name: str):
+    """Return all rows for a table_name"""
+    check_salaries_table()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT table_name, Entgeltgruppe, Stufe, Salary, valid_from, region "
+        "FROM salaries WHERE table_name=?",
+        (table_name,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+# -------------------------------
+# Root
+# -------------------------------
+@app.get("/")
+def root():
+    """Redirect root to docs"""
+    return RedirectResponse(url="/docs")
+
+
+# -------------------------------
 # Endpoints
-# -----------------------------
-@app.get("/v1/cells", response_model=List[PayCell])
-def list_cells(group: Optional[str] = None, step: Optional[int] = None):
-    """
-    Return all cells or filtered by Entgeltgruppe and/or Stufe
-    """
-    con = get_db_connection()
-    cur = con.cursor()
-    query = "SELECT * FROM tvl_salaries WHERE 1=1"
-    params = []
-    if group:
-        query += " AND Entgeltgruppe = ?"
-        params.append(group)
-    if step:
-        query += " AND Stufe = ?"
-        params.append(step)
-    query += " ORDER BY Entgeltgruppe, Stufe"
-
-    rows = cur.execute(query, params).fetchall()
-    con.close()
-
-    if not rows:
-        raise HTTPException(status_code=404, detail="No matching cells found")
-
-    return [PayCell(**dict(r)) for r in rows]
+# -------------------------------
 
 
-@app.get("/v1/lookup", response_model=PayCell)
-def lookup(
-    group: str = Query(..., description="Entgeltgruppe"),
-    step: int = Query(..., ge=1, le=6, description="Stufe"),
+@app.get("/v1/tables", response_model=List[str])
+def get_tables():
+    """Return a list of all available table names"""
+    check_salaries_table()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT table_name FROM salaries")
+    rows = cur.fetchall()
+    conn.close()
+    return [row["table_name"] for row in rows]
+
+
+@app.get("/v1/cells", response_model=List[SalaryCell])
+def get_cells(
+    table_name: str = Query(..., description="Tarif table, e.g., TV-L, TVöD")
 ):
-    """
-    Lookup a single salary cell
-    """
-    con = get_db_connection()
-    cur = con.cursor()
-    query = """
-        SELECT * FROM tvl_salaries
-        WHERE Entgeltgruppe = ? AND Stufe = ?
-        LIMIT 1
-    """
-    row = cur.execute(query, (group, step)).fetchone()
-    con.close()
+    data = query_salaries(table_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"No data for table '{table_name}'")
+    return data
 
+
+@app.get("/v1/lookup", response_model=SalaryCell)
+def lookup_salary(
+    table_name: str = Query(..., description="Tarif table, e.g., TV-L, TVöD"),
+    group: str = Query(..., description="Entgeltgruppe, e.g., E5"),
+    step: int = Query(..., description="Stufe, e.g., 3"),
+):
+    check_salaries_table()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT table_name, Entgeltgruppe, Stufe, Salary, valid_from, region "
+        "FROM salaries WHERE table_name=? AND Entgeltgruppe=? AND Stufe=?",
+        (table_name, group, step),
+    )
+    row = cur.fetchone()
+    conn.close()
     if not row:
-        raise HTTPException(status_code=404, detail="Cell not found")
-
-    return PayCell(**dict(row))
+        raise HTTPException(status_code=404, detail="Salary cell not found")
+    return dict(row)
