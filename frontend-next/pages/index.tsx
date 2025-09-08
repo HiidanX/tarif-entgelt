@@ -2,10 +2,6 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-// This is a single-file Next.js page (TypeScript/React). Drop it into
-// frontend-next/pages/index.tsx inside a Next.js app created with
-// `npx create-next-app@latest frontend-next --ts` and Tailwind (optional).
-
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000/v1";
 
 type SalaryCell = {
@@ -14,256 +10,208 @@ type SalaryCell = {
   Stufe: number;
   Salary: number;
   valid_from: string;
-  region: string;
+  region?: string;
 };
 
 export default function HomePage() {
+  // State management...
   const [tables, setTables] = useState<string[]>([]);
   const [tableName, setTableName] = useState<string>("");
   const [cells, setCells] = useState<SalaryCell[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // lookup state
+  
   const [selectedGroup, setSelectedGroup] = useState<string>("");
   const [selectedStep, setSelectedStep] = useState<number>(1);
   const [lookupResult, setLookupResult] = useState<SalaryCell | null>(null);
-
-  // fetch available tables
+  
   useEffect(() => {
     let mounted = true;
     fetch(`${API_BASE}/tables`)
-      .then((r) => r.json())
-      .then((data) => {
+      .then(r => r.json())
+      .then(data => {
         if (!mounted) return;
         setTables(data);
-        if (data.length > 0) setTableName((t) => (t || data[0]));
+        setTableName(data[0] || "");
       })
-      .catch((err) => {
-        console.error(err);
-        setError(String(err));
-      });
-    return () => {
-      mounted = false;
-    };
+      .catch(err => setError(String(err)));
+    return () => { mounted = false; };
   }, []);
-
-  // fetch cells when tableName changes
+  
   useEffect(() => {
     if (!tableName) return;
-    setLoading(true);
     setError(null);
     fetch(`${API_BASE}/cells?table_name=${encodeURIComponent(tableName)}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`API error ${r.status}`);
-        return r.json();
-      })
+      .then(r => r.ok ? r.json() : Promise.reject(`Error ${r.status}`))
       .then((data: SalaryCell[]) => {
         setCells(data);
-        // set defaults
-        const groups = Array.from(new Set(data.map((d) => d.Entgeltgruppe))).sort();
-        setSelectedGroup((g) => g || (groups.length ? groups[0] : ""));
-        setSelectedStep((s) => s || 1);
+        const groups = Array.from(new Set(data.map(d => d.Entgeltgruppe))).sort();
+        setSelectedGroup(groups[0] || "");
+        setSelectedStep(1);
       })
-      .catch((err) => setError(String(err)))
-      .finally(() => setLoading(false));
+      .catch(err => setError(String(err)));
   }, [tableName]);
-
+  
   const entgeltOrder = useMemo(() => [
-    "E 1","E 2","E 2Ü","E 3","E 4","E 5","E 6","E 7","E 8","E 9a","E 9b","E 10","E 11","E 12","E 13","E 13Ü","E 14","E 15","E 15Ü"
+    "E 1","E 2","E 2Ü","E 3","E 4","E 5","E 6","E 7","E 8","E 9a","E 9b","E 9c","E 10","E 11","E 12","E 13","E 13Ü","E 14","E 15","E 15Ü"
   ], []);
-
-  // pivoted matrix
+  
   const pivot = useMemo(() => {
-    if (!cells || cells.length === 0) return null;
     const map: Record<string, Record<number, number>> = {};
-    let min = Infinity, max = -Infinity;
     cells.forEach(c => {
-      const g = (c.Entgeltgruppe || "").replace(/\u00A0/g, ' ').trim();
-      if (!map[g]) map[g] = {};
-      map[g][c.Stufe] = Number(c.Salary);
-      if (Number(c.Salary) < min) min = Number(c.Salary);
-      if (Number(c.Salary) > max) max = Number(c.Salary);
+      const g = c.Entgeltgruppe.trim();
+      map[g] ||= {};
+      map[g][c.Stufe] = c.Salary;
     });
-    return {map, min: isFinite(min)?min:null, max: isFinite(max)?max:null};
+    return map;
   }, [cells]);
-
+  
   const groups = useMemo(() => {
-    if (!cells) return [];
-    const s = Array.from(new Set(cells.map(c => (c.Entgeltgruppe||"").replace(/\u00A0/g,' ').trim())));
-    // sort by entgeltOrder if present
-    s.sort((a,b)=>{
-      const ia = entgeltOrder.indexOf(a);
-      const ib = entgeltOrder.indexOf(b);
-      if (ia===-1 && ib===-1) return a.localeCompare(b);
-      if (ia===-1) return 1;
-      if (ib===-1) return -1;
-      return ia-ib;
+    return Object.keys(pivot).sort((a, b) => {
+      const ia = entgeltOrder.indexOf(a), ib = entgeltOrder.indexOf(b);
+      if (ia !== -1 && ib !== -1) return ia - ib;
+      return ia === -1 ? 1 : -1;
     });
-    return s;
-  }, [cells, entgeltOrder]);
-
-  const steps = useMemo(()=>{
-    if (!cells) return [1,2,3,4,5,6];
-    return Array.from(new Set(cells.map(c=>c.Stufe))).sort((a,b)=>a-b);
+  }, [pivot, entgeltOrder]);
+  
+  const steps = useMemo(() => {
+    const allSteps = new Set<number>();
+    cells.forEach(c => allSteps.add(c.Stufe));
+    return Array.from(allSteps).sort((a, b) => a - b);
   }, [cells]);
-
-  async function doLookup(){
+  
+  const doLookup = async () => {
     setLookupResult(null);
-    try{
+    try {
       const r = await fetch(`${API_BASE}/lookup?table_name=${encodeURIComponent(tableName)}&group=${encodeURIComponent(selectedGroup)}&step=${selectedStep}`);
       if (!r.ok) throw new Error(`Lookup failed: ${r.status}`);
       const data = await r.json();
       setLookupResult(data);
-    }catch(e:any){
-      setError(String(e));
+    } catch (e: any) {
+      setError(e.message);
     }
-  }
-
-  function colorFor(value:number|null, min:number|null, max:number|null){
-    if (value==null || min==null || max==null) return '#eee';
-    // simple linear hue from green (low) to blue (high)
-    const t = (value-min)/(max-min||1);
-    const hue = 200 - Math.round(120*t); // 200..80
-    return `hsl(${hue}deg 80% ${40 - Math.round(10*t)}%)`;
-  }
-
-  function downloadCSV(){
-    if(!pivot) return;
-    const rows = [];
-    const header = ['Entgeltgruppe', ...steps];
-    rows.push(header.join(','));
-    for(const g of groups){
-      const cellsRow = [g];
-      for(const s of steps){
-        const val = pivot.map[g] && pivot.map[g][s] != null ? pivot.map[g][s] : '';
-        cellsRow.push(String(val));
-      }
-      rows.push(cellsRow.join(','));
-    }
-    const blob = new Blob([rows.join('\n')], {type: 'text/csv'});
+  };
+  
+  const downloadCSV = () => {
+    const rows = [["Entgeltgruppe", ...steps], ...groups.map(g => [
+      g, ...steps.map(s => pivot[g]?.[s] ?? "")
+    ])];
+    const blob = new Blob([rows.map(r => r.join(",")).join("\n")], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `${tableName}_salaries.csv`; a.click(); URL.revokeObjectURL(url);
-  }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${tableName}_salaries.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50 text-slate-800 p-6" style={{fontFamily:'Inter, system-ui'}}>
-      <div className="max-w-6xl mx-auto">
-        <header className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold">📊 Tarif Salary Explorer</h1>
-            <p className="text-sm text-gray-600">Compare tariff tables (TV-L, TVöD, ...) — data from your FastAPI backend.</p>
-          </div>
-          <div>
-            <label className="text-sm text-gray-600 mr-2">Table</label>
-            <select value={tableName} onChange={e=>setTableName(e.target.value)} className="border rounded px-2 py-1">
-              {tables.map(t=> <option key={t} value={t}>{t}</option>)}
-            </select>
-          </div>
+    <div className="min-h-screen bg-gray-100 text-gray-900 font-sans p-4">
+      <div className="max-w-5xl mx-auto">
+        {/* Header with branded look */}
+        <header className="mb-6">
+          <h1 className="text-5xl font-[cursive] font-bold text-red-500 drop-shadow-sm select-none">
+            Tarif Gehalt
+          </h1>
+          <p className="text-gray-600 mt-1">
+            Dein moderner Tarif-Gehaltsrechner – klar strukturiert und einfach zu bedienen.
+          </p>
         </header>
-
-        {error && <div className="mb-4 p-3 bg-red-100 text-red-800 rounded">{error}</div>}
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-          <div className="col-span-2 bg-white p-4 rounded shadow">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-4">
-                <div>
-                  <label className="block text-sm text-gray-600">Entgeltgruppe</label>
-                  <select value={selectedGroup} onChange={e=>setSelectedGroup(e.target.value)} className="border rounded px-2 py-1">
-                    {groups.map(g=> <option key={g} value={g}>{g}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-600">Stufe</label>
-                  <select value={selectedStep} onChange={e=>setSelectedStep(Number(e.target.value))} className="border rounded px-2 py-1">
-                    {steps.map(s=> <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <button onClick={doLookup} className="bg-blue-600 text-white px-3 py-1 rounded">Lookup</button>
-                </div>
-                <div>
-                  <button onClick={downloadCSV} className="bg-gray-200 px-3 py-1 rounded">Download CSV</button>
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-sm text-gray-500">Valid from</div>
-                <div className="font-medium text-slate-700">{cells.length? cells[0].valid_from : '-'}</div>
-              </div>
+        
+        {/* Error display */}
+        {error && <div className="mb-4 p-3 bg-red-100 border border-red-300 rounded">{error}</div>}
+        
+        {/* Input and results card */}
+        <div className="bg-white p-6 rounded-xl shadow-md grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Controls */}
+          <div className="space-y-4">
+            <div>
+              <label className="font-medium">Tariftabelle</label>
+              <select
+                className="mt-1 w-full border rounded px-3 py-2"
+                value={tableName} onChange={e => setTableName(e.target.value)}
+              >
+                {tables.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
             </div>
-
-            <div className="mb-4">
-              <div className="grid grid-cols-6 gap-1 text-xs mb-2">
-                {steps.map(s=> <div key={s} className="text-center">St {s}</div>)}
-              </div>
-              <div>
-                <div className="overflow-auto border rounded">
-                  <div style={{minWidth: 600}}>
-                    {groups.map((g, idx)=> (
-                      <div key={g} className="flex">
-                        <div style={{width:160}} className="p-2 border-r bg-gray-50">{g}</div>
-                        {steps.map(s=>{
-                          const v = pivot && pivot.map[g] ? pivot.map[g][s] ?? null : null;
-                          const bg = colorFor(v, pivot?.min ?? null, pivot?.max ?? null);
-                          return (
-                            <div key={s} style={{flex:1, minWidth:80}} className="p-2 border-r text-center" title={v!=null?`${v} €`:'missing'}>
-                              <div style={{background:bg, color: '#0b1220', padding:'6px 4px', borderRadius:4}}>
-                                {v!=null? Math.round(v).toLocaleString() : '—'}
-                              </div>
-                            </div>
-                          )})}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
+            <div>
+              <label className="font-medium">Entgeltgruppe</label>
+              <select
+                className="mt-1 w-full border rounded px-3 py-2"
+                value={selectedGroup} onChange={e => setSelectedGroup(e.target.value)}
+              >
+                {groups.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
             </div>
-
+            <div>
+              <label className="font-medium">Stufe</label>
+              <select
+                className="mt-1 w-full border rounded px-3 py-2"
+                value={selectedStep} onChange={e => setSelectedStep(Number(e.target.value))}
+              >
+                {steps.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={doLookup}
+                className="flex-1 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
+              >Lookup</button>
+              <button
+                onClick={downloadCSV}
+                className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded hover:bg-gray-300 transition"
+              >CSV</button>
+            </div>
+            
+            {/* Lookup result */}
             {lookupResult && (
-              <div className="bg-white border rounded p-3 mt-2">
-                <strong>Lookup:</strong> {lookupResult.Entgeltgruppe} Stufe {lookupResult.Stufe} — {lookupResult.Salary.toFixed(2)} €
+              <div className="mt-4 bg-green-50 border border-green-200 p-4 rounded">
+                <div className="text-lg font-semibold mb-1">Gehalt:</div>
+                <div>{lookupResult.Entgeltgruppe} Stufe {lookupResult.Stufe} &rarr; <strong>{lookupResult.Salary.toFixed(2)} €</strong></div>
+                <div className="text-sm text-gray-500 mt-2">
+                  Gültig ab {lookupResult.valid_from}
+                </div>
               </div>
             )}
-
           </div>
-
-          <aside className="bg-white p-4 rounded shadow">
-            <h3 className="font-medium mb-2">Summary</h3>
-            <div className="space-y-2 text-sm text-gray-700">
-              <div>Min: {pivot?.min ? Math.round(pivot.min).toLocaleString() + ' €' : '-'}</div>
-              <div>Max: {pivot?.max ? Math.round(pivot.max).toLocaleString() + ' €' : '-'}</div>
-              <div>Groups: {groups.length}</div>
-              <div>Steps: {steps.length}</div>
+          
+          {/* Summary panel */}
+          <div className="md:col-span-2 space-y-4">
+            <div className="bg-gray-50 p-4 rounded-lg border">
+              <h2 className="font-semibold text-lg mb-2">Tabelle im Überblick</h2>
+              <p>
+                Gruppen: <strong>{groups.length}</strong> &bull; Stufen: <strong>{steps.length}</strong>
+              </p>
             </div>
-          </aside>
+            
+            {/* Salary table */}
+            <div className="overflow-auto bg-white rounded-lg shadow-inner border">
+              <table className="min-w-full">
+                <thead className="bg-gray-200 sticky top-0">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Entgeltgruppe</th>
+                    {steps.map(s => <th key={s} className="px-4 py-2 text-center">St {s}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map(g => (
+                    <tr key={g} className="hover:bg-gray-100">
+                      <td className="px-4 py-2">{g}</td>
+                      {steps.map(s => (
+                        <td key={s} className="px-4 py-2 text-center">
+                          {pivot[g]?.[s] != null ? pivot[g][s].toLocaleString() + " €" : "—"}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            
+            <p className="mt-2 text-gray-500 text-sm">
+              Hinweis: Werte dienen zur Orientierung. Individuelle Abweichungen möglich.
+            </p>
+          </div>
         </div>
-
-        <section className="bg-white p-4 rounded shadow">
-          <h2 className="font-semibold mb-3">Heatmap</h2>
-          <div className="overflow-auto">
-            <div style={{minWidth: 700}}>
-              <div style={{display:'grid', gridTemplateColumns:`160px repeat(${steps.length}, 1fr)`, gap:8}}>
-                <div style={{gridColumn:'1 / -1', textAlign:'center', color:'#666'}}>Higher salaries → darker</div>
-                {groups.map(g=> (
-                  <React.Fragment key={g}>
-                    <div style={{padding:6, background:'#f9fafb', borderRight:'1px solid #eee'}}>{g}</div>
-                    {steps.map(s=>{
-                      const v = pivot && pivot.map[g] ? pivot.map[g][s] ?? null : null;
-                      const bg = colorFor(v, pivot?.min ?? null, pivot?.max ?? null);
-                      return (
-                        <div key={s} style={{padding:6, background:bg, textAlign:'center'}}>
-                          {v!=null? Math.round(v).toLocaleString() : '—'}
-                        </div>
-                      )})}
-                  </React.Fragment>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-
       </div>
     </div>
   );
