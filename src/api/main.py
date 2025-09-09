@@ -1,5 +1,6 @@
 # src/api/main.py
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import List
@@ -8,6 +9,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+
+from src.utils.sorting import sort_entgeltgruppe_key
 
 # -------------------------------
 # Config: database
@@ -135,3 +138,60 @@ def lookup_salary(
     if not row:
         raise HTTPException(status_code=404, detail="Salary cell not found")
     return dict(row)
+
+
+@app.get("/v1/groups", response_model=List[str])
+def get_groups(
+    table_name: str = Query(..., description="Tarif table, e.g., TV-L, TVöD")
+):
+    """Return all distinct Entgeltgruppen for a given table, sorted naturally."""
+    check_salaries_table()
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT Entgeltgruppe
+        FROM salaries
+        WHERE table_name=?
+        """,
+        (table_name,),
+    )
+    groups = [row[0] for row in cur.fetchall()]
+    conn.close()
+
+    if not groups:
+        raise HTTPException(
+            status_code=404, detail=f"No groups found for table '{table_name}'"
+        )
+
+    # Sort with custom function
+    groups_sorted = sorted(groups, key=sort_entgeltgruppe_key)
+    return groups_sorted
+
+
+@app.get("/v1/steps", response_model=List[int])
+def get_steps(
+    table_name: str = Query(..., description="Tarif table, e.g., TV-L, TVöD"),
+    group: str = Query(..., description="Entgeltgruppe, e.g., E5"),
+):
+    """Return all available Stufen for a given table & Entgeltgruppe."""
+    check_salaries_table()
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT Stufe
+        FROM salaries
+        WHERE table_name=? AND Entgeltgruppe=?
+        ORDER BY Stufe
+        """,
+        (table_name, group),
+    )
+    steps = [row[0] for row in cur.fetchall()]
+    conn.close()
+    if not steps:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No steps found for table '{table_name}', group '{group}'",
+        )
+    return steps
