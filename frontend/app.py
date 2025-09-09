@@ -1,10 +1,18 @@
 # frontend/app.py
 
+import sys
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
 import seaborn as sns
 import streamlit as st
+
+# Add project root/src to sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
+
+from utils.sorting import sort_entgeltgruppe_key
 
 # -------------------------------
 # Config
@@ -20,6 +28,24 @@ st.set_page_config(
 # -------------------------------
 # Title & Intro
 # -------------------------------
+st.sidebar.markdown(
+    """
+    <h1 style="
+        text-align: left;
+        font-family: 'Segoe UI', Helvetica, Arial, sans-serif;
+        font-weight: 800;
+        font-size: 32px;
+        color: #e63946;
+        text-shadow: 1px 1px 4px rgba(0,0,0,0.4);
+        letter-spacing: 1px;
+        margin-bottom: 10px;
+    ">
+        Tarif Gehalt
+    </h1>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.markdown(
     """
     <h1 style='text-align: center; color: #0E76A8;'>📊 Tarif Salary Dashboard</h1>
@@ -43,31 +69,40 @@ except requests.exceptions.RequestException:
 
 table_name = st.sidebar.selectbox("Tarif Table", options=available_tables)
 
-# Entgeltgruppe and Stufe for lookup
-entgelt_order = [
-    "E 1",
-    "E 2",
-    "E 2Ü",
-    "E 3",
-    "E 4",
-    "E 5",
-    "E 6",
-    "E 7",
-    "E 8",
-    "E 9a",
-    "E 9b",
-    "E 10",
-    "E 11",
-    "E 12",
-    "E 13",
-    "E 13Ü",
-    "E 14",
-    "E 15",
-    "E 15Ü",
-]
+# Fetch available groups and steps dynamically for the selected table
+try:
+    groups_resp = requests.get(f"{API_URL}/groups", params={"table_name": table_name})
+    groups_resp.raise_for_status()
+    available_groups = groups_resp.json()
+except requests.exceptions.RequestException:
+    available_groups = []
 
-group = st.sidebar.selectbox("Entgeltgruppe", options=entgelt_order)
-step = st.sidebar.selectbox("Stufe", options=[1, 2, 3, 4, 5, 6])
+group = st.sidebar.selectbox("Entgeltgruppe", options=available_groups)
+
+try:
+    steps_resp = requests.get(
+        f"{API_URL}/steps", params={"table_name": table_name, "group": group}
+    )
+    steps_resp.raise_for_status()
+    available_steps = steps_resp.json()
+except requests.exceptions.RequestException:
+    available_steps = []
+
+step = st.sidebar.selectbox("Stufe", options=available_steps)
+
+# Weekly working hours (before salary lookup)
+st.sidebar.markdown("---")
+weekly_hours = st.sidebar.slider(
+    "Weekly Hours", min_value=8, max_value=50, value=40, step=1
+)
+
+# Weihnachtsgeld and Sonderzahlung
+weihnachtsgeld_pct = st.sidebar.slider(
+    "Weihnachtsgeld (% of monthly)", min_value=0, max_value=100, value=0, step=5
+)
+sonderzahlung = st.sidebar.number_input(
+    "Sonderzahlung (€)", min_value=0, value=0, step=100
+)
 
 # Lookup Salary
 if st.sidebar.button("Lookup Salary"):
@@ -78,11 +113,40 @@ if st.sidebar.button("Lookup Salary"):
         )
         resp.raise_for_status()
         data = resp.json()
+
+        base_monthly_salary = data["Salary"]
+
+        # Adjust for working hours
+        monthly_salary = base_monthly_salary * (weekly_hours / 40)
+
+        # Add Weihnachtsgeld (once per year, % of monthly)
+        yearly_salary = monthly_salary * 12
+        yearly_salary += monthly_salary * (weihnachtsgeld_pct / 100)
+
+        # Add Sonderzahlung (flat amount)
+        yearly_salary += sonderzahlung
+
+        # Recompute monthly including extras (for display only)
+        effective_monthly = yearly_salary / 12
+
+        # Hourly salary based on yearly & weekly hours
+        yearly_hours = weekly_hours * 52
+        hourly_salary = yearly_salary / yearly_hours
+
+        # Show main salary metric
         st.sidebar.metric(
             label=f"{data['Entgeltgruppe']} Stufe {data['Stufe']}",
-            value=f"{data['Salary']:.2f} €",
+            value=f"{effective_monthly:,.2f} € / month",
         )
         st.sidebar.caption(f"Valid from: {data['valid_from']} ({data['region']})")
+
+        # Separator
+        st.sidebar.markdown("---")
+
+        # Additional salary breakdowns
+        st.sidebar.metric("📅 Yearly Salary", f"{yearly_salary:,.2f} €")
+        st.sidebar.metric("⏱ Hourly Salary", f"{hourly_salary:,.2f} €")
+
     except requests.exceptions.HTTPError:
         st.sidebar.error("Salary cell not found!")
 
@@ -98,8 +162,12 @@ try:
 
     # Pivot and reindex
     df_pivot = df.groupby(["Entgeltgruppe", "Stufe"])["Salary"].first().unstack()
-    df_pivot = df_pivot.reindex(entgelt_order)
-    df_pivot = df_pivot.sort_index(axis=1)
+    # Sort rows with custom key
+    df_pivot = df_pivot.reindex(sorted(df_pivot.index, key=sort_entgeltgruppe_key))
+
+    # Sort columns numerically (Stufen)
+    df_pivot = df_pivot[sorted(df_pivot.columns)]
+    df_pivot = df_pivot.dropna(how="all")
 
     # -------------------------------
     # KPI Metrics
