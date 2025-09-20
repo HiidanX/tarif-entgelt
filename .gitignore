@@ -4,6 +4,7 @@ Entgelttabelle_raw/
 
 # Ignore database
 data/
+
 src/api/__pycache__/main.cpython-310.pyc
 src/utils/__pycache__/__init__.cpython-310.pyc
 src/utils/__pycache__/sorting.cpython-310.pyc
